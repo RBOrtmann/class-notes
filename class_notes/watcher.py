@@ -9,11 +9,13 @@ import time
 import tomllib
 import requests
 import anthropic
+import argparse
 
 from datetime import date
 from pathlib import Path
+from urllib.parse import quote
 from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler
+from watchdog.events import FileSystemEventHandler, FileSystemEvent
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -23,7 +25,7 @@ DEFAULT_CONFIG = """\
 # class-notes configuration
 
 # Folder MacWhisper exports summaries to
-watch_dir = "/Users/brendan/Documents/MacWhisper"
+watch_dir = "~/Documents/MacWhisper"
 
 # Obsidian REST API
 obsidian_host = "http://localhost:27124"
@@ -36,10 +38,10 @@ obsidian_token = "YOUR_OBSIDIAN_TOKEN_HERE"
 # When running the watcher, pass --class <key> to select the active class.
 [classes]
 
-  [classes.advanced-edm]
-  name = "Advanced EDM Spring '26"
-  vault_path = "03 - SLAM Academy/Advanced EDM Spring '26"
-  tags = ["class", "production", "ableton", "slam-academy"]
+  [classes.my-class]
+  name = "My Class"
+  vault_path = "Classes/My Class"
+  tags = ["class"]
 """
 
 REFORMAT_PROMPT = """\
@@ -78,25 +80,30 @@ def load_config() -> dict:
 def reformat_with_claude(summary: str, tags: list[str]) -> str:
     client = anthropic.Anthropic()
     tags_yaml = "[" + ", ".join(tags) + "]"
-    prompt = REFORMAT_PROMPT.format(
-        date=date.today().isoformat(),
-        tags=tags_yaml,
-        summary=summary,
+    # Use .replace() instead of .format() so braces in the summary don't crash
+    prompt = (
+        REFORMAT_PROMPT
+        .replace("{date}", date.today().isoformat())
+        .replace("{tags}", tags_yaml)
+        .replace("{summary}", summary)
     )
     message = client.messages.create(
-        model="claude-sonnet-4-5",
+        model="claude-sonnet-4-6",
         max_tokens=2048,
         messages=[{"role": "user", "content": prompt}],
     )
-    return message.content[0].text
+    block = message.content[0]
+    if not isinstance(block, anthropic.types.TextBlock):
+        raise ValueError(f"Unexpected content block type: {type(block)}")
+    return block.text
 
 
-def push_to_obsidian(host: str, token: str, vault_path: str, title: str, content: str):
+def push_to_obsidian(host: str, token: str, vault_path: str, title: str, content: str) -> str:
     """PUT a markdown file into the Obsidian vault via Local REST API."""
     # Sanitise title for use as a filename
     safe_title = re.sub(r'[\\/*?:"<>|]', "", title).strip()
     note_path = f"{vault_path}/{safe_title}.md"
-    url = f"{host}/vault/{note_path}"
+    url = f"{host}/vault/{quote(note_path)}"
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "text/markdown",
@@ -114,10 +121,10 @@ class SummaryHandler(FileSystemEventHandler):
         self.class_cfg = config["classes"][class_key]
         self.processed: set[str] = set()
 
-    def on_created(self, event):
+    def on_created(self, event: FileSystemEvent) -> None:
         if event.is_directory:
             return
-        path = Path(event.src_path)
+        path = Path(str(event.src_path))
         # MacWhisper exports summaries as "<title> Summary.txt" or "<title> Summary.md"
         if "summary" in path.stem.lower() and path.suffix in (".txt", ".md"):
             self._handle(path)
@@ -141,26 +148,29 @@ class SummaryHandler(FileSystemEventHandler):
         if not title:
             title = f"Class Notes {date.today().isoformat()}"
 
-        print(f"  Reformatting with Claude...")
-        tags = self.class_cfg.get("tags", self.config.get("default_tags", []))
-        note_content = reformat_with_claude(summary, tags)
+        try:
+            print(f"  Reformatting with Claude...")
+            tags = self.class_cfg.get("tags", self.config.get("default_tags", []))
+            note_content = reformat_with_claude(summary, tags)
 
-        print(f"  Pushing to Obsidian...")
-        cfg = self.config
-        note_path = push_to_obsidian(
-            host=cfg["obsidian_host"],
-            token=cfg["obsidian_token"],
-            vault_path=self.class_cfg["vault_path"],
-            title=title,
-            content=note_content,
-        )
-        print(f"  ✓ Note created: {note_path}\n")
+            print(f"  Pushing to Obsidian...")
+            cfg = self.config
+            note_path = push_to_obsidian(
+                host=cfg["obsidian_host"],
+                token=cfg["obsidian_token"],
+                vault_path=self.class_cfg["vault_path"],
+                title=title,
+                content=note_content,
+            )
+            print(f"  ✓ Note created: {note_path}\n")
+        except Exception as e:
+            print(f"  ✗ Failed to process {path.name}: {e}\n")
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main():
-    import argparse
+    config = load_config()  # creates config on first run and exits if missing
 
     parser = argparse.ArgumentParser(description="Watch for MacWhisper summaries and push to Obsidian.")
     parser.add_argument(
@@ -168,8 +178,6 @@ def main():
         help="Class key from config (e.g. 'advanced-edm')",
     )
     args = parser.parse_args()
-
-    config = load_config()
 
     if args.class_key not in config.get("classes", {}):
         available = ", ".join(config["classes"].keys())
