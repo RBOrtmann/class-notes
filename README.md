@@ -4,6 +4,8 @@ Watches MacWhisper's export folder for new summary files, reformats them
 with Claude, and pushes structured notes into your Obsidian vault via the
 Local REST API plugin.
 
+> **MacWhisper Pro required.** Auto-export of summaries is a Pro feature.
+
 ## Setup
 
 ### 1. Install
@@ -20,20 +22,39 @@ On first run, a config file is created at:
 ~/.config/class-notes/config.toml
 ```
 
-Edit it to set your **Obsidian REST API token** (Obsidian → Settings → Local REST API).
+Edit it to fill in the required values:
+
+```toml
+# Folder MacWhisper exports summaries to (Pro feature)
+watch_dir = "~/Documents/MacWhisper"
+
+# Obsidian Local REST API — Settings → Local REST API → API key
+obsidian_host = "http://localhost:27124"
+obsidian_token = "YOUR_OBSIDIAN_TOKEN_HERE"
+
+[classes.my-class]
+name = "My Class Name"
+vault_path = "Folder/Subfolder"   # vault-relative path for the note
+tags = ["class", "my-tag"]
+```
 
 ### 3. Set ANTHROPIC_API_KEY
 
-Add to `~/.zshrc`:
+Store it in the macOS Keychain and load it in `~/.oh-my-zsh/custom/exports.zsh`
+(or `~/.zshrc`):
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
+# Store once
+security add-generic-password -a "$USER" -s anthropic-api-key -w
+
+# In your shell config
+export ANTHROPIC_API_KEY=$(security find-generic-password -a "$USER" -s anthropic-api-key -w 2>/dev/null)
 ```
 
 ### 4. Run before class
 
 ```bash
-class-notes --class advanced-edm
+class-notes --class my-class
 ```
 
 Leave it running in a terminal tab. When MacWhisper exports a summary,
@@ -61,8 +82,8 @@ In `~/.config/class-notes/config.toml`:
 ```toml
 [classes.my-other-class]
 name = "Other Class Name"
-vault_path = "03 - SLAM Academy/Other Class Name"
-tags = ["class", "production", "slam-academy"]
+vault_path = "Folder/Other Class Name"
+tags = ["class", "my-tag"]
 ```
 
 Then run with `--class my-other-class`.
