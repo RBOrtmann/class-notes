@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=42"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "class-notes"
+version = "0.1.0"
+description = "Watch MacWhisper exports and push formatted summaries to Obsidian"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=0.25",
+    "watchdog>=4.0",
+    "requests>=2.31",
+]
+
+[project.scripts]
+class-notes = "class_notes.watcher:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
