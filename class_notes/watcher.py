@@ -9,6 +9,9 @@ import time
 import tomllib
 import requests
 import anthropic
+import urllib3
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 import argparse
 
 from datetime import date
@@ -28,7 +31,7 @@ DEFAULT_CONFIG = """\
 watch_dir = "~/Documents/MacWhisper"
 
 # Obsidian REST API
-obsidian_host = "http://localhost:27124"
+obsidian_host = "https://127.0.0.1:27124"
 obsidian_token = "YOUR_OBSIDIAN_TOKEN_HERE"
 
 # Vault root (relative paths below are relative to your vault root)
@@ -56,8 +59,8 @@ tags: {tags}
 
 After the frontmatter, format the rest of the content as clean Markdown using \
 whatever sections make sense given the summary content. \
-Use headers like ## Key Concepts, ## Techniques, ## Tools & Plugins, ## Action Items as appropriate. \
-Do not include the original frontmatter or any preamble — output only the final note content.
+Use headers like ## Key Concepts, ## Techniques as appropriate. \
+Do not include an Action Items section. Do not include the original frontmatter or any preamble — output only the final note content.
 
 Here is the summary to reformat:
 
@@ -108,7 +111,7 @@ def push_to_obsidian(host: str, token: str, vault_path: str, title: str, content
         "Authorization": f"Bearer {token}",
         "Content-Type": "text/markdown",
     }
-    response = requests.put(url, headers=headers, data=content.encode("utf-8"))
+    response = requests.put(url, headers=headers, data=content.encode("utf-8"), verify=False)
     response.raise_for_status()
     return note_path
 
@@ -121,12 +124,21 @@ class SummaryHandler(FileSystemEventHandler):
         self.class_cfg = config["classes"][class_key]
         self.processed: set[str] = set()
 
+    def _is_summary(self, path: Path) -> bool:
+        return path.suffix == ".md"
+
     def on_created(self, event: FileSystemEvent) -> None:
         if event.is_directory:
             return
         path = Path(str(event.src_path))
-        # MacWhisper exports summaries as "<title> Summary.txt" or "<title> Summary.md"
-        if "summary" in path.stem.lower() and path.suffix in (".txt", ".md"):
+        if self._is_summary(path):
+            self._handle(path)
+
+    def on_moved(self, event: FileSystemEvent) -> None:
+        if event.is_directory:
+            return
+        path = Path(str(event.dest_path))
+        if self._is_summary(path):
             self._handle(path)
 
     def _handle(self, path: Path):
@@ -143,8 +155,8 @@ class SummaryHandler(FileSystemEventHandler):
             print("  Summary file is empty, skipping.")
             return
 
-        # Derive note title from filename: strip " Summary" suffix
-        title = re.sub(r"\s*[Ss]ummary$", "", path.stem).strip()
+        # Strip MacWhisper's trailing timestamp (e.g. "2026-05-20 21_57_23")
+        title = re.sub(r"\s+\d{4}-\d{2}-\d{2} \d{2}_\d{2}_\d{2}$", "", path.stem).strip()
         if not title:
             title = f"Class Notes {date.today().isoformat()}"
 
